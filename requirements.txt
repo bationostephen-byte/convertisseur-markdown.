@@ -1,0 +1,6 @@
+google-genai
+pandas
+openpyxl
+python-docx
+python-pptx
+streamlit
