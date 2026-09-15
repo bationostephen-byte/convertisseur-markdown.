@@ -16,10 +16,23 @@ st.set_page_config(page_title="Convertisseur IA Markdown", page_icon="📄", lay
 st.title("📄 Convertisseur Intelligent vers Markdown")
 st.write("Transformez vos documents (PDF, Word, Excel, PPT) en format Markdown optimisé pour l'IA.")
 
+# --- RECUPÉRATION AUTOMATIQUE DE LA CLÉ API ---
+# st.secrets.get() empêche l'application de crasher si le secret n'est pas encore configuré
+try:
+    api_key_secret = st.secrets.get("GEMINI_API_KEY", "")
+except Exception:
+    api_key_secret = ""
+
 # --- BARRE LATÉRALE ---
 with st.sidebar:
     st.header("⚙️ Configuration")
-    api_key = st.text_input("Clé API Gemini", type="password", help="Obtenez-la sur Google AI Studio")
+    
+    if api_key_secret:
+        st.success("✅ Clé API chargée automatiquement !")
+        api_key = api_key_secret
+    else:
+        api_key = st.text_input("Clé API Gemini", type="password", help="Obtenez-la sur Google AI Studio")
+        
     st.markdown("---")
     st.write("**Formats supportés :**")
     st.write("✅ PDF (.pdf)\n✅ Word (.docx)\n✅ Excel (.xlsx)\n✅ PowerPoint (.pptx)")
@@ -54,9 +67,19 @@ Reconstruis le texte fourni en Markdown propre et structuré.
 TEXTE À CONVERTIR :
 """
 
+# --- FONCTIONS UTILITAIRES ---
 def nom_ascii_securise(nom: str) -> str:
     sans_accents = unicodedata.normalize('NFKD', nom).encode('ascii', 'ignore').decode('ascii')
     return re.sub(r'[^A-Za-z0-9_.-]+', '_', sans_accents)
+
+def diagnostiquer_reponse_vide(response) -> str:
+    if response and response.prompt_feedback and response.prompt_feedback.block_reason:
+        return f"Bloqué par sécurité — raison : {response.prompt_feedback.block_reason}"
+    if response and response.candidates:
+        candidat = response.candidates[0]
+        if candidat.finish_reason and str(candidat.finish_reason) != "STOP":
+            return f"Interrompu — {candidat.finish_reason}"
+    return "Aucune explication fournie par l'API."
 
 def extraire_excel(filepath):
     dfs = pd.read_excel(filepath, sheet_name=None)
@@ -80,48 +103,60 @@ if uploaded_file and api_key:
             nom_safe = nom_ascii_securise(nom_original)
             
             with st.status("Traitement en cours...", expanded=True) as status:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    tmp_path = tmp.name
-
+                tmp_path = None
+                gemini_file = None
                 response = None
                 
-                if ext == 'pdf':
-                    st.write(f"⏳ Upload de '{nom_safe}' vers Gemini...")
-                    gemini_file = client.files.upload(file=tmp_path, config={'display_name': nom_safe})
-                    
-                    st.write("🧠 Analyse visuelle et conversion...")
-                    for tentative in range(1, MAX_TENTATIVES + 1):
-                        try:
-                            response = client.models.generate_content(
-                                model=MODEL_NAME, contents=[gemini_file, PROMPT_PDF], config=CONFIG_GENERATION
-                            )
-                            break
-                        except errors.APIError as e:
-                            if e.code in [429, 503] and tentative < MAX_TENTATIVES:
-                                time.sleep(10 * tentative)
-                            else: raise
-                    
-                    client.files.delete(name=gemini_file.name)
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+                        tmp.write(uploaded_file.getvalue())
+                        tmp_path = tmp.name
 
-                else:
-                    st.write("⚙️ Extraction locale du texte...")
-                    texte_brut = extraire_word(tmp_path) if ext == 'docx' else extraire_excel(tmp_path) if ext == 'xlsx' else extraire_ppt(tmp_path)
+                    # 1. CAS DU PDF
+                    if ext == 'pdf':
+                        st.write(f"⏳ Upload de '{nom_safe}' vers Gemini...")
+                        gemini_file = client.files.upload(file=tmp_path, config={'display_name': nom_safe})
+                        
+                        st.write("🧠 Analyse visuelle et conversion...")
+                        for tentative in range(1, MAX_TENTATIVES + 1):
+                            try:
+                                response = client.models.generate_content(
+                                    model=MODEL_NAME, contents=[gemini_file, PROMPT_PDF], config=CONFIG_GENERATION
+                                )
+                                break
+                            except errors.APIError as e:
+                                if e.code in [429, 503] and tentative < MAX_TENTATIVES:
+                                    time.sleep(10 * tentative)
+                                else: 
+                                    raise
 
-                    st.write("🧠 Formatage IA en Markdown...")
-                    for tentative in range(1, MAX_TENTATIVES + 1):
-                        try:
-                            response = client.models.generate_content(
-                                model=MODEL_NAME, contents=f"{PROMPT_TEXTE}\n\n{texte_brut}", config=CONFIG_GENERATION
-                            )
-                            break
-                        except errors.APIError as e:
-                            if e.code in [429, 503] and tentative < MAX_TENTATIVES:
-                                time.sleep(10 * tentative)
-                            else: raise
+                    # 2. CAS DES FICHIERS OFFICE
+                    else:
+                        st.write("⚙️ Extraction locale du texte...")
+                        texte_brut = extraire_word(tmp_path) if ext == 'docx' else extraire_excel(tmp_path) if ext == 'xlsx' else extraire_ppt(tmp_path)
 
-                os.remove(tmp_path)
+                        st.write("🧠 Formatage IA en Markdown...")
+                        for tentative in range(1, MAX_TENTATIVES + 1):
+                            try:
+                                response = client.models.generate_content(
+                                    model=MODEL_NAME, contents=f"{PROMPT_TEXTE}\n\n{texte_brut}", config=CONFIG_GENERATION
+                                )
+                                break
+                            except errors.APIError as e:
+                                if e.code in [429, 503] and tentative < MAX_TENTATIVES:
+                                    time.sleep(10 * tentative)
+                                else: 
+                                    raise
 
+                finally:
+                    # Nettoyage sécurisé quoi qu'il arrive
+                    if gemini_file:
+                        try: client.files.delete(name=gemini_file.name)
+                        except: pass
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+
+                # 3. VÉRIFICATION ET AFFICHAGE
                 if response and response.text:
                     status.update(label="Conversion terminée !", state="complete", expanded=False)
                     st.success("🎉 Fichier prêt !")
@@ -129,11 +164,12 @@ if uploaded_file and api_key:
                     with st.expander("👀 Aperçu du Markdown"):
                         st.markdown(response.text)
                 else:
+                    raison = diagnostiquer_reponse_vide(response)
                     status.update(label="Échec de la conversion", state="error")
-                    st.error("L'IA n'a renvoyé aucun texte.")
+                    st.error(f"⚠️ L'IA n'a renvoyé aucun texte.\n\n**Diagnostic :** {raison}")
 
         except Exception as e:
-            st.error(f"Erreur : {e}")
+            st.error(f"Erreur inattendue : {e}")
 
 elif uploaded_file and not api_key:
-    st.warning("👈 Entrez votre clé API Gemini dans la barre latérale pour commencer.")
+    st.warning("👈 Veuillez vérifier votre clé API dans les secrets ou la saisir manuellement.")
