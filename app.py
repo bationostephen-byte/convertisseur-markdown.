@@ -36,7 +36,7 @@ with st.sidebar:
     st.write("**Formats supportés :**")
     st.write("✅ PDF (.pdf)\n✅ Word (.docx)\n✅ Excel (.xlsx)\n✅ PowerPoint (.pptx)")
 
-# Modèles essayés dans l'ordre : le standard, puis le "lite" en secours si
+# Modèles essayés dans l'ordre : le standard (3.5 Flash), puis le "lite" (3.1 Flash-Lite) en secours si
 # le premier est saturé (503) ou si son quota personnel est épuisé (429).
 # Les deux sont gratuits et tournent sur des pools de serveurs distincts.
 MODELES_A_ESSAYER = ["gemini-flash-latest", "gemini-flash-lite-latest"]
@@ -75,7 +75,6 @@ def nom_ascii_securise(nom: str) -> str:
     sans_accents = unicodedata.normalize('NFKD', nom).encode('ascii', 'ignore').decode('ascii')
     return re.sub(r'[^A-Za-z0-9_.-]+', '_', sans_accents)
 
-
 def diagnostiquer_reponse_vide(response) -> str:
     if response and response.prompt_feedback and response.prompt_feedback.block_reason:
         return f"Bloque par securite - raison : {response.prompt_feedback.block_reason}"
@@ -85,7 +84,6 @@ def diagnostiquer_reponse_vide(response) -> str:
             return f"Interrompu - {candidat.finish_reason}"
     return "Aucune explication fournie par l'API."
 
-
 def generer_avec_repli(client, contents):
     """Essaie chaque modele de la liste l'un apres l'autre. Une erreur 429
     (quota) ou 503 (surcharge) fait basculer sur le modele suivant plutot
@@ -94,7 +92,7 @@ def generer_avec_repli(client, contents):
     for nom_modele in MODELES_A_ESSAYER:
         for tentative in range(1, TENTATIVES_PAR_MODELE + 1):
             try:
-                st.write(f"   -> Essai avec {nom_modele} (tentative {tentative}/{TENTATIVES_PAR_MODELE})...")
+                st.write(f"   -> Essai avec `{nom_modele}` (tentative {tentative}/{TENTATIVES_PAR_MODELE})...")
                 return client.models.generate_content(
                     model=nom_modele, contents=contents, config=CONFIG_GENERATION
                 )
@@ -110,9 +108,8 @@ def generer_avec_repli(client, contents):
                     time.sleep(10 * tentative)
                 else:
                     break
-        st.write(f"   ⚠️ {nom_modele} indisponible, bascule sur le modele suivant...")
+        st.warning(f"   ⚠️ `{nom_modele}` indisponible, bascule sur le modèle de secours...")
     raise derniere_erreur
-
 
 def extraire_excel(filepath):
     dfs = pd.read_excel(filepath, sheet_name=None)
@@ -120,7 +117,6 @@ def extraire_excel(filepath):
     for nom, df in dfs.items():
         morceaux.append(f"\n\n[FEUILLE EXCEL : {nom}]\n" + df.to_markdown(index=False))
     return "".join(morceaux)
-
 
 def _iterer_blocs_word(document):
     """Parcourt le corps du document dans l'ordre reel d'apparition,
@@ -130,7 +126,6 @@ def _iterer_blocs_word(document):
             yield Paragraph(enfant, document)
         elif enfant.tag.endswith('}tbl'):
             yield Table(enfant, document)
-
 
 def extraire_word(filepath):
     document = Document(filepath)
@@ -144,7 +139,6 @@ def extraire_word(filepath):
             morceaux.append("\n[TABLEAU]\n" + "\n".join(lignes))
     return "\n".join(morceaux)
 
-
 def extraire_ppt(filepath):
     prs = Presentation(filepath)
     morceaux = []
@@ -157,7 +151,6 @@ def extraire_ppt(filepath):
                 lignes = ["\t".join(cell.text.strip() for cell in row.cells) for row in shape.table.rows]
                 morceaux.append("[TABLEAU]\n" + "\n".join(lignes))
     return "\n".join(morceaux)
-
 
 # --- INTERFACE PRINCIPALE ---
 uploaded_file = st.file_uploader("Deposez votre fichier ici", type=['pdf', 'docx', 'xlsx', 'pptx'])
