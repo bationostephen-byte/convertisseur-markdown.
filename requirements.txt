@@ -4,3 +4,4 @@ openpyxl
 python-docx
 python-pptx
 streamlit
+tabulate
